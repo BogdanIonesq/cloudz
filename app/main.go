@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"github.com/go-redis/redis/v8"
 	"golang.org/x/crypto/chacha20"
 	"io/ioutil"
@@ -169,12 +168,12 @@ func init() {
 
 	redisHost := os.Getenv("REDIS_HOST")
 	if redisHost == "" {
-		fmt.Println("error: env variable REDIS_HOST not set")
+		log.Fatalln("error: env variable REDIS_HOST not set")
 	}
 
 	redisPort := os.Getenv("REDIS_PORT")
 	if redisPort == "" {
-		fmt.Println("error: env variable REDIS_PORT not set")
+		log.Fatalln("error: env variable REDIS_PORT not set")
 	}
 
 	redisClient = redis.NewClient(&redis.Options{
