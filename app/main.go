@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"github.com/go-redis/redis/v8"
 	"golang.org/x/crypto/chacha20"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 )
 
 const NONCE_SIZE = 24
@@ -71,8 +74,20 @@ func encrypt(w http.ResponseWriter, req *http.Request) {
 	// add nonce to end of ciphertext
 	plainBytes = append(plainBytes, nonce...)
 
+	// generate response containing ciphertext
 	response := Payload{Data: base64.StdEncoding.EncodeToString(plainBytes)}
 	log.Printf("b64 ciphertext: %s\n", response.Data)
+
+	// add ciphertext hash to redis
+	ciphertextHash := sha256.Sum256([]byte(response.Data))
+
+	if err := redisClient.SAdd(ctx, "known_hashes", ciphertextHash[:]).Err(); err != nil {
+		log.Printf("encrypt error: %s\n", err.Error())
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	} else {
+		log.Printf("ciphertext hash added to redis: %x\n", ciphertextHash)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	err = json.NewEncoder(w).Encode(response)
@@ -102,6 +117,20 @@ func decrypt(w http.ResponseWriter, req *http.Request) {
 	err := json.NewDecoder(req.Body).Decode(&decReq)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// check if data is known
+	ciphertextHash := sha256.Sum256([]byte(decReq.Data))
+
+	ok, err := redisClient.SIsMember(ctx, "known_hashes", ciphertextHash[:]).Result()
+	if err != nil {
+		log.Printf("decrypt error: %s\n", err.Error())
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	} else if !ok {
+		log.Println("request ciphertext is unkown")
+		http.Error(w, "invalid data", http.StatusBadRequest)
 		return
 	}
 
@@ -138,8 +167,18 @@ func decrypt(w http.ResponseWriter, req *http.Request) {
 func init() {
 	log.SetFlags(log.Ldate | log.Lmicroseconds)
 
+	redisHost := os.Getenv("REDIS_HOST")
+	if redisHost == "" {
+		fmt.Println("error: env variable REDIS_HOST not set")
+	}
+
+	redisPort := os.Getenv("REDIS_PORT")
+	if redisPort == "" {
+		fmt.Println("error: env variable REDIS_PORT not set")
+	}
+
 	redisClient = redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
+		Addr:     redisHost + ":" + redisPort,
 		Password: "", // no password set
 		DB:       0,  // use default DB
 	})
