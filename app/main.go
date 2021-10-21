@@ -21,7 +21,7 @@ var KEY []byte
 var redisClient *redis.Client
 
 type Payload struct {
-	// base64 encoded string of data requested to be encrypted
+	// base64 encoded string of data requested to be encrypted/decrypted
 	Data string	`json:"data"`
 }
 
