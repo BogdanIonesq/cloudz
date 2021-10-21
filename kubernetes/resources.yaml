@@ -225,9 +225,6 @@ spec:
         - name: podlogs
           mountPath: /mnt/podslog
           readOnly: true
-        # - name: dockercontainers-vol
-        #   mountPath: /var/lib/docker/containers
-        #   readOnly: true
         - name: fluentbit-config
           mountPath: /fluent-bit/etc/fluent-bit.conf
           subPath: fluent-bit.conf
@@ -241,9 +238,6 @@ spec:
         - name: fluentbit-config
           configMap:
             name: cloudz-fluentbit-config
-        # - name: dockercontainers-vol
-        #   hostPath:
-        #     path: /var/lib/docker/containers/
         - name: fluentbit-parser
           configMap:
             name: cloudz-fluentbit-parser

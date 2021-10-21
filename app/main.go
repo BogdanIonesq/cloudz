@@ -8,6 +8,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"github.com/go-redis/redis/v8"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/crypto/chacha20"
 	"io/ioutil"
 	"log"
@@ -16,9 +19,23 @@ import (
 )
 
 const NONCE_SIZE = 24
-var ctx = context.Background()
-var KEY []byte
-var redisClient *redis.Client
+var (
+	ctx = context.Background()
+	KEY []byte
+	redisClient *redis.Client
+	encryptOps = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "cloudz_encrypt_operations",
+		Help: "The total number of successful encryption operations",
+	})
+	decryptOps = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "cloudz_decrypt_operations",
+		Help: "The total number of successful decryption operations",
+	})
+	errorOps = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "cloudz_errors",
+		Help: "The total number of errors produced",
+	})
+)
 
 type Payload struct {
 	// base64 encoded string of data requested to be encrypted/decrypted
@@ -31,6 +48,7 @@ func encrypt(w http.ResponseWriter, req *http.Request) {
 	// print request body
 	buf, bodyErr := ioutil.ReadAll(req.Body)
 	if bodyErr != nil {
+		errorOps.Inc()
 		http.Error(w, bodyErr.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -44,12 +62,14 @@ func encrypt(w http.ResponseWriter, req *http.Request) {
 	var encReq Payload
 	err := json.NewDecoder(req.Body).Decode(&encReq)
 	if err != nil {
+		errorOps.Inc()
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	plainBytes, err := base64.StdEncoding.DecodeString(encReq.Data)
 	if err != nil {
+		errorOps.Inc()
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -57,6 +77,7 @@ func encrypt(w http.ResponseWriter, req *http.Request) {
 	// generate random IV
 	nonce := make([]byte, NONCE_SIZE)
 	if _, err := rand.Read(nonce); err != nil {
+		errorOps.Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -64,6 +85,7 @@ func encrypt(w http.ResponseWriter, req *http.Request) {
 	// encrypt data
 	cipher, err := chacha20.NewUnauthenticatedCipher(KEY, nonce)
 	if err != nil {
+		errorOps.Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -82,6 +104,7 @@ func encrypt(w http.ResponseWriter, req *http.Request) {
 
 	if err := redisClient.SAdd(ctx, "known_hashes", ciphertextHash[:]).Err(); err != nil {
 		log.Printf("encrypt error: %s\n", err.Error())
+		errorOps.Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	} else {
@@ -91,8 +114,11 @@ func encrypt(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	err = json.NewEncoder(w).Encode(response)
 	if err != nil {
+		errorOps.Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	} else {
+		encryptOps.Inc()
 	}
 }
 
@@ -102,6 +128,7 @@ func decrypt(w http.ResponseWriter, req *http.Request) {
 	// print request body
 	buf, bodyErr := ioutil.ReadAll(req.Body)
 	if bodyErr != nil {
+		errorOps.Inc()
 		http.Error(w, bodyErr.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -115,6 +142,7 @@ func decrypt(w http.ResponseWriter, req *http.Request) {
 	var decReq Payload
 	err := json.NewDecoder(req.Body).Decode(&decReq)
 	if err != nil {
+		errorOps.Inc()
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -125,10 +153,12 @@ func decrypt(w http.ResponseWriter, req *http.Request) {
 	ok, err := redisClient.SIsMember(ctx, "known_hashes", ciphertextHash[:]).Result()
 	if err != nil {
 		log.Printf("decrypt error: %s\n", err.Error())
+		errorOps.Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	} else if !ok {
 		log.Println("request ciphertext is unkown")
+		errorOps.Inc()
 		http.Error(w, "invalid data", http.StatusBadRequest)
 		return
 	}
@@ -136,6 +166,7 @@ func decrypt(w http.ResponseWriter, req *http.Request) {
 	// decode base64 data into bytes
 	ciphertext, err := base64.StdEncoding.DecodeString(decReq.Data)
 	if err != nil {
+		errorOps.Inc()
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -147,6 +178,7 @@ func decrypt(w http.ResponseWriter, req *http.Request) {
 	// decrypt data
 	cipher, err := chacha20.NewUnauthenticatedCipher(KEY, nonce)
 	if err != nil {
+		errorOps.Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -160,6 +192,8 @@ func decrypt(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	} else {
+		decryptOps.Inc()
 	}
 }
 
@@ -214,6 +248,7 @@ func init() {
 func main() {
 	http.HandleFunc("/encrypt", encrypt)
 	http.HandleFunc("/decrypt", decrypt)
+	http.Handle("/metrics", promhttp.Handler())
 
 
 	err := http.ListenAndServe(":8080", nil)
