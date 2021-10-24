@@ -1,0 +1,251 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: elastic-config-cm
+data:
+  elasticsearch.yml: |
+    network.host: 0.0.0.0
+    discovery.seed_hosts: ["127.0.0.1", "[::1]"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch
+spec:
+  selector:
+    app: elastic
+  ports:
+    - name: es-rest
+      port: 9200
+      targetPort: 9200
+    - name: es-comms
+      port: 9300
+      targetPort: 9300
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: elastic-deployment
+  labels:
+    app: elastic
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: elastic
+  template:
+    metadata:
+      labels:
+        app: elastic
+    spec:
+      containers:
+      - name: elastic
+        image: docker.elastic.co/elasticsearch/elasticsearch:7.14.2
+        env:
+        - name: discovery.type
+          value: "single-node"
+        - name: xpack.security.enabled
+          value: "true"
+        - name: ELASTIC_PASSWORD
+          value: "parola"
+        ports:
+        - containerPort: 9200
+        - containerPort: 9300
+        volumeMounts:
+        - name: elastic-config
+          mountPath: /usr/share/elasticsearch/config/elasticsearch.yml
+          subPath: elasticsearch.yml
+      volumes:
+      - name: elastic-config
+        configMap:
+          name: elastic-config-cm
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kibana-deployment
+  labels:
+    app: kibana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kibana
+  template:
+    metadata:
+      labels:
+        app: kibana
+    spec:
+      containers:
+      - name: kibana
+        image: docker.elastic.co/kibana/kibana:7.14.2
+        env:
+        - name: ELASTICSEARCH_HOSTS
+          value: "http://elasticsearch:9200"
+        - name: ELASTICSEARCH_USERNAME
+          value: "elastic"
+        - name: ELASTICSEARCH_PASSWORD
+          value: "parola"
+        - name: xpack.security.enabled
+          value: "true"
+        ports:
+        - containerPort: 5601
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kibana
+spec:
+  selector:
+    app: kibana
+  ports:
+    - name: main
+      port: 5601
+      targetPort: 5601
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus
+rules:
+- apiGroups: [""] # "" indicates the core API group
+  resources: ["*"]
+  verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus
+subjects:
+- kind: ServiceAccount
+  name: prometheus
+  namespace: default
+roleRef:
+  kind: ClusterRole
+  name: prometheus
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 5s
+    scrape_configs:
+      - job_name: 'kubernetes-pods'
+        kubernetes_sd_configs:
+        - role: pod
+        tls_config:
+          insecure_skip_verify: true
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_pod_container_name]
+          regex: "fluentbit-sidecar"
+          action: drop
+        - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+          separator: ;
+          regex: "true"
+          replacement: $1
+          action: keep
+        - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+          separator: ;
+          regex: (.+)
+          target_label: __metrics_path__
+          replacement: $1
+          action: replace
+        - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scheme]
+          separator: ;
+          regex: (https?)
+          target_label: __scheme__
+          replacement: $1
+          action: replace
+        - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+          separator: ;
+          regex: ([^:]+)(?::\d+)?;(\d+)
+          target_label: __address__
+          replacement: $1:$2
+          action: replace
+        - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+          separator: ;
+          regex: (([0-9a-z]*:){6}([0-9a-z]+));(.+)
+          target_label: __address__
+          replacement: '[$1]:$4'
+          action: replace
+        - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+          separator: ;
+          regex: (([0-9a-z]*:){7}([0-9a-z]+));(.+)
+          target_label: __address__
+          replacement: '[$1]:$4'
+          action: replace
+        - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+          separator: ;
+          regex: ((.*)((?::))((?:[0-9]+)));(.+)
+          target_label: __address__
+          replacement: $2:$5
+          action: replace
+        - separator: ;
+          regex: __meta_kubernetes_pod_label_(.+)
+          replacement: $1
+          action: labelmap
+        - source_labels: [__meta_kubernetes_namespace]
+          separator: ;
+          regex: (.*)
+          target_label: kubernetes_namespace
+          replacement: $1
+          action: replace
+        - source_labels: [__meta_kubernetes_pod_name]
+          separator: ;
+          regex: (.*)
+          target_label: kubernetes_pod_name
+          replacement: $1
+          action: replace
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  labels:
+    app: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: prometheus
+      containers:
+        - name: prometheus
+          image: prom/prometheus
+          ports:
+          - containerPort: 9090
+            name: prom-dashboard
+          volumeMounts:
+            - name: prometheus-config
+              mountPath: /etc/prometheus/prometheus.yml
+              subPath: prometheus.yml
+      volumes:
+        - name: prometheus-config
+          configMap:
+            name: prometheus-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - name: main
+      port: 9090
+      targetPort: 9090
