@@ -18,12 +18,11 @@ $ echo -n "secret_data" | base64
 $ curl -X POST http://<APP_IP>:8080/encrypt -H 'Content-Type: application/json' -d '{"data":"<BASE64_DATA>"}'
 ```
 The server will:
-
-    * decode the base64 encoded data to bytes
-    * encrypt the bytes with ChaCha20 with a 24 bytes nonce
-    * create the ciphertext by concatenating the resulting encrypting bytes and the nonce bytes
-    * store the SHA256 hash of the ciphertext to redis
-    * return the base64 encoded ciphertext to the client
+* decode the base64 encoded data to bytes
+* encrypt the bytes with ChaCha20 with a 24 bytes nonce
+* create the ciphertext by concatenating the resulting encrypting bytes and the nonce bytes
+* store the SHA256 hash of the ciphertext to redis
+* return the base64 encoded ciphertext to the client
 
 To decrypt previosuly encrypted data:
 * execute a GET request on the `/decrypt` endpoint:
@@ -31,10 +30,9 @@ To decrypt previosuly encrypted data:
 $ curl -X GET http://<APP_IP>:8080/decrypt -H 'Content-Type: application/json' -d '{"data":"<BASE64_DATA>"}'
 ```
 The server will:
-
-    * compute the SHA256 hash of the data and check if it is present in redis
-    * if it is found in redis, decrypt the data to obtain the plaintext
-    * return the base64 encoded plaintext to the client
+* compute the SHA256 hash of the data and check if it is present in redis
+* if it is found in redis, decrypt the data to obtain the plaintext
+* return the base64 encoded plaintext to the client
 
 The server also has a third endpoint at `/metrics`, which serves [Prometheus](https://prometheus.io/) metrics. In addition to the default Go metrics, the following counters are available:
 * `cloudz_encrypt_operations`: the total number of successful encryption operations
